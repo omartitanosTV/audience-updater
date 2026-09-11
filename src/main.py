@@ -1,9 +1,10 @@
 import uuid
 from pathlib import Path
 from snowflake_client import run_query
-from springserve_client import authenticate, get_segments
+from springserve_client import authenticate, replace_segment_ifas
+from audience_updater import ensure_segment, wait_for_segment_upload
 
-'''
+
 query_path = Path("queries/sports_titan_os_es.sql")
 
 query = query_path.read_text()
@@ -30,17 +31,20 @@ unique_ifas = set(ifas)
 unique_ifas = list(unique_ifas)
 
 # Create a list to store invalid IFAs
+valid_ifas = []
 invalid_ifas = []
+
 
 # Validate every unique IFA
 for ifa in unique_ifas:
     try:
         uuid.UUID(ifa)
+        valid_ifas.append(ifa)
     except (ValueError, TypeError):
         invalid_ifas.append(ifa)
 
 
-for ifa in unique_ifas[:5]:
+for ifa in valid_ifas[:5]:
     print(ifa)
     
 # Create the output file
@@ -48,15 +52,20 @@ output_path = Path("sports_titan_os_es.csv")
 
 # Write one IFA per line
 with open(output_path, "w") as file:
-    for ifa in unique_ifas:
+    for ifa in valid_ifas:
         file.write(ifa + "\n")
         
         
 print(f"Audience size: {len(results):,}")
-print(f"Unique IFAs: {len(unique_ifas):,}")
+print(f"Valid IFAs: {len(valid_ifas):,}")
 print(f"Invalid IFAs: {len(invalid_ifas):,}")
 print(f"File created: {output_path}")
-'''
+
+# Check if there are any valid IFAs
+if len(valid_ifas) == 0:
+    raise ValueError(
+        "Audience has 0 valid IFAs. SpringServe will not be updated."
+    )
 
 # Authenticate with SpringServe and get a valid token
 token = authenticate()
@@ -68,26 +77,26 @@ print("SpringServe authentication successful")
 # bool(token) will be True if the token is not empty
 print(f"Token received: {bool(token)}")
 
+segment = ensure_segment(
+    name="Test - Sports - Titan OS (ES)",
+    description="Sports audience for Titan OS devices in Spain."
+)
 
-# Get all SpringServe segments
-# The get_segments() function should handle pagination internally
-segments = get_segments()
+print("Segment ready")
+print(segment)
 
-# Confirm that the segments request worked
-print("Segments request successful")
 
-# Show the Python type returned by the API
-# In this case, we expect a list
-print(type(segments))
+# Replace the segment IFAs using the generated CSV
+replace_response = replace_segment_ifas(
+    segment_id=segment["id"],
+    file_path=output_path
+)
 
-# Show the total number of segments retrieved
-print(f"Number of segments: {len(segments)}")
+print("Segment IFAs replaced successfully")
+print(replace_response)
 
-# Only continue if the list is not empty
-if segments:
+# Wait until SpringServe finishes processing the uploaded IFAs
+updated_segment = wait_for_segment_upload(segment["id"])
 
-    # Show the first segment so we can inspect its structure
-    print("First segment:")
-
-    # Print the first dictionary in the segments list
-    print(segments[0])
+print("Upload completed")
+print(f"Final segment count: {updated_segment['segment_count']}")
