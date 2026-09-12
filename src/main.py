@@ -1,60 +1,21 @@
-import uuid
 from pathlib import Path
-from snowflake_client import run_query
 from springserve_client import authenticate
+from audience_builder import build_audience_from_query
 from audience_updater import (
     ensure_segment,
-    replace_ifas_with_summary,
-    append_new_ifas,
+    update_audience,
 )
 
+# Define the query file
+query_file = "queries/sports_titan_os_es.sql"
 
-query_path = Path("queries/sports_titan_os_es.sql")
+# Build the audience from the Snowflake query
+valid_ifas, invalid_ifas, total_rows = build_audience_from_query(
+    query_file=query_file
+)
 
-query = query_path.read_text()
-
-results = run_query(query)
-
-# Create an empty list to store the IFAs
-ifas = []
-
-# Go through every row returned by Snowflake
-for row in results:
-
-    # Take the first value from the row
-    ifa = row[0]
-
-    # Only keep it if it is not None
-    if ifa is not None:
-        ifas.append(ifa)
-        
-# Create a set to remove duplicate IFAs
-unique_ifas = set(ifas)
-
-# Convert it back to a list
-unique_ifas = list(unique_ifas)
-
-# Create a list to store invalid IFAs
-valid_ifas = []
-invalid_ifas = []
-
-
-# Validate every unique IFA
-for ifa in unique_ifas:
-    try:
-        uuid.UUID(ifa)
-        valid_ifas.append(ifa)
-    except (ValueError, TypeError):
-        invalid_ifas.append(ifa)
-
-
-for ifa in valid_ifas[:5]:
-    print(ifa)
-    
-# Create the output file
-output_path = Path("sports_titan_os_es.csv")       
-        
-print(f"Audience size: {len(results):,}")
+# Print the audience information
+print(f"Audience size: {total_rows:,}")
 print(f"Valid IFAs: {len(valid_ifas):,}")
 print(f"Invalid IFAs: {len(invalid_ifas):,}")
 
@@ -63,6 +24,9 @@ if len(valid_ifas) == 0:
     raise ValueError(
         "Audience has 0 valid IFAs. SpringServe will not be updated."
     )
+
+# Define the output CSV file
+output_path = Path("sports_titan_os_es.csv")
 
 # Authenticate with SpringServe and get a valid token
 token = authenticate()
@@ -82,25 +46,13 @@ segment = ensure_segment(
 print("Segment ready")
 print(segment)
 
-mode = "append"
+# Select the mode for updating the audience
+mode = "replace"
 
-if mode == "replace":
-    updated_segment = replace_ifas_with_summary(
-        segment_id=segment["id"],
-        valid_ifas=valid_ifas,
-        output_path=output_path
-    )
-
-elif mode == "append":
-    updated_segment = append_new_ifas(
-        segment_id=segment["id"],
-        valid_ifas=valid_ifas,
-        output_path=output_path
-    )
-
-else:
-    raise ValueError(
-        f"Unsupported update mode: {mode}"
-    )
-
-
+# Update the audience using the selected mode
+updated_segment = update_audience(
+    segment=segment,
+    valid_ifas=valid_ifas,
+    output_path=output_path,
+    mode=mode
+)
