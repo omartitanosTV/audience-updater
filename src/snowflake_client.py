@@ -76,3 +76,5 @@ def run_query(query):
     finally:
         # Close the connection even if an error occurs
         connection.close()
+        
+        

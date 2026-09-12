@@ -3,6 +3,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 # Authenticate with SpringServe and return a valid token.
@@ -185,4 +186,66 @@ def get_segment_by_id(segment_id):
     response.raise_for_status()
 
     # Return the segment as Python data
+    return response.json()
+
+
+# This function retrieves all IFAs from a specific segment in SpringServe, returning them as a list of strings.
+def get_segment_ifas(segment_id):
+    # Get a valid authentication token
+    token = authenticate()
+
+    # Read the SpringServe base URL from .env
+    base_url = os.getenv("SPRINGSERVE_BASE_URL")
+
+    # Request all IFAs from the segment.
+    # Important: SpringServe returns an empty list if pagination params are sent.
+    response = requests.get(
+        f"{base_url}/segments/{segment_id}/items",
+        headers={
+            "Authorization": token,
+            "Accept": "application/json",
+        },
+        timeout=300,
+    )
+
+    # Stop if SpringServe returns an HTTP error
+    response.raise_for_status()
+
+    # Convert the response into Python data
+    items = response.json()
+
+    # Store the extracted IFAs
+    all_ifas = []
+
+    for item in items:
+        all_ifas.append(item["item"])
+
+    return all_ifas
+
+
+# This function appends new IFAs to an existing segment in SpringServe, using a CSV file containing only the new IFAs.
+def append_segment_ifas(segment_id, file_path):
+    # Get a valid authentication token
+    token = authenticate()
+
+    # Read the SpringServe base URL from .env
+    base_url = os.getenv("SPRINGSERVE_BASE_URL")
+
+    # Open the CSV file containing only the new IFAs
+    with open(file_path, "rb") as file:
+        response = requests.post(
+            f"{base_url}/segments/{segment_id}/items/file_bulk_create",
+            headers={
+                "Authorization": token,
+                "Accept": "application/json",
+            },
+            files={
+                "csv_file": file
+            },
+            timeout=300,
+        )
+
+    # Stop if SpringServe returns an HTTP error
+    response.raise_for_status()
+
     return response.json()

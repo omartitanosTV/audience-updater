@@ -1,8 +1,12 @@
 import uuid
 from pathlib import Path
 from snowflake_client import run_query
-from springserve_client import authenticate, replace_segment_ifas
-from audience_updater import ensure_segment, wait_for_segment_upload
+from springserve_client import authenticate
+from audience_updater import (
+    ensure_segment,
+    replace_ifas_with_summary,
+    append_new_ifas,
+)
 
 
 query_path = Path("queries/sports_titan_os_es.sql")
@@ -48,18 +52,11 @@ for ifa in valid_ifas[:5]:
     print(ifa)
     
 # Create the output file
-output_path = Path("sports_titan_os_es.csv")
-
-# Write one IFA per line
-with open(output_path, "w") as file:
-    for ifa in valid_ifas:
-        file.write(ifa + "\n")
-        
+output_path = Path("sports_titan_os_es.csv")       
         
 print(f"Audience size: {len(results):,}")
 print(f"Valid IFAs: {len(valid_ifas):,}")
 print(f"Invalid IFAs: {len(invalid_ifas):,}")
-print(f"File created: {output_path}")
 
 # Check if there are any valid IFAs
 if len(valid_ifas) == 0:
@@ -85,18 +82,25 @@ segment = ensure_segment(
 print("Segment ready")
 print(segment)
 
+mode = "append"
 
-# Replace the segment IFAs using the generated CSV
-replace_response = replace_segment_ifas(
-    segment_id=segment["id"],
-    file_path=output_path
-)
+if mode == "replace":
+    updated_segment = replace_ifas_with_summary(
+        segment_id=segment["id"],
+        valid_ifas=valid_ifas,
+        output_path=output_path
+    )
 
-print("Segment IFAs replaced successfully")
-print(replace_response)
+elif mode == "append":
+    updated_segment = append_new_ifas(
+        segment_id=segment["id"],
+        valid_ifas=valid_ifas,
+        output_path=output_path
+    )
 
-# Wait until SpringServe finishes processing the uploaded IFAs
-updated_segment = wait_for_segment_upload(segment["id"])
+else:
+    raise ValueError(
+        f"Unsupported update mode: {mode}"
+    )
 
-print("Upload completed")
-print(f"Final segment count: {updated_segment['segment_count']}")
+
