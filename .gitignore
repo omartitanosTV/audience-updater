@@ -2,4 +2,8 @@
 .venv/
 __pycache__/
 *.pyc
-*.csvdata/
+
+data/*
+!data/.gitkeep
+
+src/test_append.csv
