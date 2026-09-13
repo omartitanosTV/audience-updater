@@ -2,11 +2,13 @@ import sqlite3
 from pathlib import Path
 
 
-# Define the path to the SQLite database
-DATABASE_PATH = Path("data/audiences.db")
+# Resolve the database from the project root so the app works regardless
+# of the current terminal directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATABASE_PATH = PROJECT_ROOT / "data" / "audiences.db"
 
 
-# This function opens a connection to the SQLite database
+# Open a connection to the SQLite database
 def get_database_connection():
     # Make sure the data directory exists
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -23,7 +25,27 @@ def get_database_connection():
     return connection
 
 
-# This function creates the database tables if they do not already exist
+# Return the existing columns for one SQLite table
+def _get_table_columns(connection, table_name):
+    rows = connection.execute(
+        f"PRAGMA table_info({table_name})"
+    ).fetchall()
+
+    return {row["name"] for row in rows}
+
+
+# Add one column only when an older database does not have it yet
+def _ensure_column(connection, table_name, column_name, definition):
+    columns = _get_table_columns(connection, table_name)
+
+    if column_name not in columns:
+        connection.execute(
+            f"ALTER TABLE {table_name} "
+            f"ADD COLUMN {column_name} {definition}"
+        )
+
+
+# Create the database tables and upgrade older local databases in place
 def create_tables():
     connection = get_database_connection()
 
@@ -46,8 +68,72 @@ def create_tables():
                 status TEXT,
                 last_update TEXT,
                 last_count INTEGER,
-                enabled INTEGER NOT NULL DEFAULT 1
+                enabled INTEGER NOT NULL DEFAULT 1,
+                schedule_day INTEGER,
+                schedule_time TEXT NOT NULL DEFAULT '22:00',
+                schedule_timezone TEXT NOT NULL DEFAULT 'Europe/Madrid',
+                once_at TEXT,
+                next_refresh_at TEXT,
+                last_scheduled_at TEXT
             )
+            """
+        )
+
+        # Upgrade an existing audiences table without deleting user data.
+        # These ALTERs are intentionally additive so the current database can
+        # be reused when this version is copied over the existing repository.
+        _ensure_column(
+            connection,
+            "audiences",
+            "schedule_day",
+            "INTEGER",
+        )
+        _ensure_column(
+            connection,
+            "audiences",
+            "schedule_time",
+            "TEXT NOT NULL DEFAULT '22:00'",
+        )
+        _ensure_column(
+            connection,
+            "audiences",
+            "schedule_timezone",
+            "TEXT NOT NULL DEFAULT 'Europe/Madrid'",
+        )
+        _ensure_column(
+            connection,
+            "audiences",
+            "once_at",
+            "TEXT",
+        )
+        _ensure_column(
+            connection,
+            "audiences",
+            "next_refresh_at",
+            "TEXT",
+        )
+        _ensure_column(
+            connection,
+            "audiences",
+            "last_scheduled_at",
+            "TEXT",
+        )
+
+        # Apply the requested defaults to audiences that already existed.
+        cursor.execute(
+            """
+            UPDATE audiences
+            SET schedule_day = 0
+            WHERE LOWER(refresh_frequency) = 'weekly'
+              AND schedule_day IS NULL
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE audiences
+            SET schedule_day = 1
+            WHERE LOWER(refresh_frequency) = 'monthly'
+              AND schedule_day IS NULL
             """
         )
 
@@ -69,11 +155,20 @@ def create_tables():
                 segment_count INTEGER,
                 duration_seconds REAL,
                 error_message TEXT,
+                trigger_source TEXT NOT NULL DEFAULT 'manual',
                 FOREIGN KEY (audience_id)
                     REFERENCES audiences(id)
                     ON DELETE CASCADE
             )
             """
+        )
+
+        # Keep older history rows and add only the new trigger source column.
+        _ensure_column(
+            connection,
+            "audience_runs",
+            "trigger_source",
+            "TEXT NOT NULL DEFAULT 'manual'",
         )
 
         connection.commit()
@@ -82,7 +177,7 @@ def create_tables():
         connection.close()
 
 
-# This function adds a new audience to the database
+# Add a new audience to the database
 def add_audience_to_db(
     name,
     description,
@@ -90,7 +185,13 @@ def add_audience_to_db(
     mode,
     refresh_frequency,
     enabled=True,
+    schedule_day=None,
+    schedule_time="22:00",
+    schedule_timezone="Europe/Madrid",
+    once_at=None,
+    next_refresh_at=None,
 ):
+    create_tables()
     connection = get_database_connection()
 
     try:
@@ -104,9 +205,14 @@ def add_audience_to_db(
                 query,
                 mode,
                 refresh_frequency,
-                enabled
+                enabled,
+                schedule_day,
+                schedule_time,
+                schedule_timezone,
+                once_at,
+                next_refresh_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -115,6 +221,11 @@ def add_audience_to_db(
                 mode,
                 refresh_frequency,
                 int(enabled),
+                schedule_day,
+                schedule_time,
+                schedule_timezone,
+                once_at,
+                next_refresh_at,
             ),
         )
 
@@ -126,54 +237,44 @@ def add_audience_to_db(
         connection.close()
 
 
-# This function retrieves all audiences from the database
+# Retrieve all audiences from the database
 def get_audiences_from_db():
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        return connection.execute(
             """
             SELECT *
             FROM audiences
             ORDER BY id
             """
-        )
-
-        audiences = cursor.fetchall()
-
-        return audiences
+        ).fetchall()
 
     finally:
         connection.close()
 
 
-# This function retrieves one audience from the database by its ID
+# Retrieve one audience from the database by its ID
 def get_audience_from_db(audience_id):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        return connection.execute(
             """
             SELECT *
             FROM audiences
             WHERE id = ?
             """,
             (audience_id,),
-        )
-
-        audience = cursor.fetchone()
-
-        return audience
+        ).fetchone()
 
     finally:
         connection.close()
 
 
-# This function updates the configuration of an existing audience
+# Update the configuration of an existing audience
 def update_audience_in_db(
     audience_id,
     name,
@@ -182,13 +283,17 @@ def update_audience_in_db(
     mode,
     refresh_frequency,
     enabled,
+    schedule_day=None,
+    schedule_time="22:00",
+    schedule_timezone="Europe/Madrid",
+    once_at=None,
+    next_refresh_at=None,
 ):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        connection.execute(
             """
             UPDATE audiences
             SET
@@ -197,7 +302,12 @@ def update_audience_in_db(
                 query = ?,
                 mode = ?,
                 refresh_frequency = ?,
-                enabled = ?
+                enabled = ?,
+                schedule_day = ?,
+                schedule_time = ?,
+                schedule_timezone = ?,
+                once_at = ?,
+                next_refresh_at = ?
             WHERE id = ?
             """,
             (
@@ -207,6 +317,11 @@ def update_audience_in_db(
                 mode,
                 refresh_frequency,
                 int(enabled),
+                schedule_day,
+                schedule_time,
+                schedule_timezone,
+                once_at,
+                next_refresh_at,
                 audience_id,
             ),
         )
@@ -217,40 +332,110 @@ def update_audience_in_db(
         connection.close()
 
 
-# This function deletes an audience from the database by its ID
+# Delete an audience from the database by its ID
 def delete_audience_from_db(audience_id):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        connection.execute(
             """
             DELETE FROM audiences
             WHERE id = ?
             """,
             (audience_id,),
         )
-
         connection.commit()
 
     finally:
         connection.close()
 
 
-# This function updates the latest status information of an audience
+# Enable or disable an audience without changing the rest of its settings
+def set_audience_enabled_in_db(audience_id, enabled):
+    create_tables()
+    connection = get_database_connection()
+
+    try:
+        connection.execute(
+            """
+            UPDATE audiences
+            SET enabled = ?
+            WHERE id = ?
+            """,
+            (int(enabled), audience_id),
+        )
+        connection.commit()
+
+    finally:
+        connection.close()
+
+
+# Update only the calculated next automatic refresh
+def set_audience_next_refresh_in_db(
+    audience_id,
+    next_refresh_at,
+    last_scheduled_at=None,
+):
+    create_tables()
+    connection = get_database_connection()
+
+    try:
+        connection.execute(
+            """
+            UPDATE audiences
+            SET
+                next_refresh_at = ?,
+                last_scheduled_at = COALESCE(?, last_scheduled_at)
+            WHERE id = ?
+            """,
+            (
+                next_refresh_at,
+                last_scheduled_at,
+                audience_id,
+            ),
+        )
+        connection.commit()
+
+    finally:
+        connection.close()
+
+
+# Retrieve audiences whose automatic schedule is due now
+def get_due_audiences_from_db(now_utc_iso):
+    create_tables()
+    connection = get_database_connection()
+
+    try:
+        return connection.execute(
+            """
+            SELECT *
+            FROM audiences
+            WHERE enabled = 1
+              AND LOWER(refresh_frequency) != 'manual'
+              AND next_refresh_at IS NOT NULL
+              AND next_refresh_at <= ?
+            ORDER BY next_refresh_at, id
+            """,
+            (now_utc_iso,),
+        ).fetchall()
+
+    finally:
+        connection.close()
+
+
+# Update the latest status information of an audience
 def update_audience_status_in_db(
     audience_id,
     status,
     last_update,
     last_count,
 ):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        connection.execute(
             """
             UPDATE audiences
             SET
@@ -266,56 +451,28 @@ def update_audience_status_in_db(
                 audience_id,
             ),
         )
-
         connection.commit()
 
     finally:
         connection.close()
 
 
-# This function updates the latest execution result of an audience
-#
-# We keep this function because audience_service.py is already using it.
+# Keep the original function name because audience_service.py already uses it
 def save_audience_run_result_to_db(
     audience_id,
     status,
     last_update,
     last_count,
 ):
-    connection = get_database_connection()
-
-    try:
-        cursor = connection.cursor()
-
-        cursor.execute(
-            """
-            UPDATE audiences
-            SET
-                status = ?,
-                last_update = ?,
-                last_count = ?
-            WHERE id = ?
-            """,
-            (
-                status,
-                last_update,
-                last_count,
-                audience_id,
-            ),
-        )
-
-        connection.commit()
-
-    finally:
-        connection.close()
+    update_audience_status_in_db(
+        audience_id=audience_id,
+        status=status,
+        last_update=last_update,
+        last_count=last_count,
+    )
 
 
-# -------------------------------------------------------------------------
-# EXECUTION HISTORY
-# -------------------------------------------------------------------------
-
-
-# This function creates a new historical execution record
+# Create a new historical execution record
 def add_audience_run_to_db(
     audience_id,
     started_at,
@@ -327,7 +484,9 @@ def add_audience_run_to_db(
     segment_count=None,
     duration_seconds=None,
     error_message=None,
+    trigger_source="manual",
 ):
+    create_tables()
     connection = get_database_connection()
 
     try:
@@ -345,9 +504,10 @@ def add_audience_run_to_db(
                 invalid_ifas,
                 segment_count,
                 duration_seconds,
-                error_message
+                error_message,
+                trigger_source
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 audience_id,
@@ -360,6 +520,7 @@ def add_audience_run_to_db(
                 segment_count,
                 duration_seconds,
                 error_message,
+                trigger_source,
             ),
         )
 
@@ -371,14 +532,13 @@ def add_audience_run_to_db(
         connection.close()
 
 
-# This function retrieves the execution history for one audience
+# Retrieve the execution history for one audience
 def get_audience_runs_from_db(audience_id):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
+        return connection.execute(
             """
             SELECT *
             FROM audience_runs
@@ -386,25 +546,19 @@ def get_audience_runs_from_db(audience_id):
             ORDER BY started_at DESC
             """,
             (audience_id,),
-        )
-
-        runs = cursor.fetchall()
-
-        return runs
+        ).fetchall()
 
     finally:
         connection.close()
 
 
-# This function retrieves all execution history
-def get_all_audience_runs_from_db():
+# Retrieve all execution history with the audience name included
+def get_all_audience_runs_from_db(limit=None):
+    create_tables()
     connection = get_database_connection()
 
     try:
-        cursor = connection.cursor()
-
-        cursor.execute(
-            """
+        query = """
             SELECT
                 audience_runs.*,
                 audiences.name AS audience_name
@@ -412,12 +566,14 @@ def get_all_audience_runs_from_db():
             INNER JOIN audiences
                 ON audiences.id = audience_runs.audience_id
             ORDER BY audience_runs.started_at DESC
-            """
-        )
+        """
+        parameters = ()
 
-        runs = cursor.fetchall()
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters = (int(limit),)
 
-        return runs
+        return connection.execute(query, parameters).fetchall()
 
     finally:
         connection.close()

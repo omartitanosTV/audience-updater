@@ -1,0 +1,166 @@
+{% extends "web/base.html" %}
+
+{% block title %}Audience Automation{% endblock %}
+
+{% block content %}
+<div class="page-toolbar">
+    <div>
+        <p class="intro">
+            Refresh SpringServe audiences manually or schedule them to run automatically.
+            Weekly defaults to Monday at 22:00 and monthly defaults to day 1 at 22:00.
+        </p>
+    </div>
+    <a class="button primary" href="{% url 'web:audience_create' %}">New audience</a>
+</div>
+
+<div class="summary-grid">
+    <div class="summary-card">
+        <span class="summary-label">Audiences</span>
+        <strong>{{ summary.total }}</strong>
+    </div>
+    <div class="summary-card">
+        <span class="summary-label">Active</span>
+        <strong>{{ summary.active }}</strong>
+    </div>
+    <div class="summary-card">
+        <span class="summary-label">Scheduled</span>
+        <strong>{{ summary.scheduled }}</strong>
+    </div>
+    <div class="summary-card">
+        <span class="summary-label">Failed</span>
+        <strong>{{ summary.failed }}</strong>
+    </div>
+</div>
+
+<section>
+    <div class="shead">
+        <span>Audience configuration</span>
+        <span class="n">{{ summary.total }}</span>
+    </div>
+
+    <div class="tblwrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Audience</th>
+                    <th>Mode</th>
+                    <th>Schedule</th>
+                    <th>Next refresh</th>
+                    <th>Status</th>
+                    <th>Last update</th>
+                    <th>Last count</th>
+                    <th>Active</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for audience in audiences %}
+                    <tr>
+                        <td>
+                            <strong>{{ audience.name }}</strong>
+                            {% if audience.description %}
+                                <div class="cell-sub">{{ audience.description|truncatechars:70 }}</div>
+                            {% endif %}
+                        </td>
+                        <td><span class="pill">{{ audience.mode|title }}</span></td>
+                        <td>{{ audience.schedule_summary }}</td>
+                        <td>{{ audience.next_refresh_display }}</td>
+                        <td>
+                            <span class="status status-{{ audience.status|default:'idle' }}">
+                                {{ audience.status|default:"Not run"|title }}
+                            </span>
+                        </td>
+                        <td>{{ audience.last_update|default:"—" }}</td>
+                        <td class="num">
+                            {% if audience.last_count is not None %}
+                                {{ audience.last_count }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if audience.enabled %}
+                                <span class="status status-success">Yes</span>
+                            {% else %}
+                                <span class="status status-idle">No</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="table-actions">
+                                <form method="post" action="{% url 'web:refresh_audience' audience.id %}">
+                                    {% csrf_token %}
+                                    <button class="small accent" type="submit">Refresh now</button>
+                                </form>
+
+                                <a class="button small" href="{% url 'web:audience_edit' audience.id %}">Edit</a>
+
+                                <form method="post" action="{% url 'web:toggle_audience' audience.id %}">
+                                    {% csrf_token %}
+                                    <button class="small" type="submit">
+                                        {% if audience.enabled %}Disable{% else %}Enable{% endif %}
+                                    </button>
+                                </form>
+
+                                <form
+                                    method="post"
+                                    action="{% url 'web:audience_delete' audience.id %}"
+                                    data-confirm="Delete '{{ audience.name|escapejs }}'? This also deletes its run history."
+                                >
+                                    {% csrf_token %}
+                                    <button class="small danger" type="submit">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="9" class="empty-state">
+                            No audiences yet. Create the first audience to start.
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section>
+    <div class="shead">
+        <span>Recent executions</span>
+        <a class="act" href="{% url 'web:history' %}">View all history</a>
+    </div>
+
+    <div class="tblwrap compact-table">
+        <table>
+            <thead>
+                <tr>
+                    <th>Audience</th>
+                    <th>Started</th>
+                    <th>Trigger</th>
+                    <th>Status</th>
+                    <th>Valid IFAs</th>
+                    <th>Segment count</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in recent_runs %}
+                    <tr>
+                        <td>{{ run.audience_name }}</td>
+                        <td>{{ run.started_at }}</td>
+                        <td><span class="pill">{{ run.trigger_source|title }}</span></td>
+                        <td><span class="status status-{{ run.status }}">{{ run.status|title }}</span></td>
+                        <td class="num">{{ run.valid_ifas|default_if_none:"—" }}</td>
+                        <td class="num">{{ run.segment_count|default_if_none:"—" }}</td>
+                        <td>{{ run.duration_display }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="7" class="empty-state">No executions recorded yet.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

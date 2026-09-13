@@ -1,0 +1,100 @@
+{% extends "web/base.html" %}
+
+{% block title %}{{ page_title }} · Audience Automation{% endblock %}
+{% block header_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<div class="page-toolbar">
+    <p class="intro">
+        The audience SQL and SpringServe update mode stay in the same configuration.
+        The scheduler only decides when the existing audience service is called.
+    </p>
+    <a class="button secondary" href="{% url 'web:dashboard' %}">Back to dashboard</a>
+</div>
+
+<form method="post" class="form-panel" id="audienceForm">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+        <div class="msg err">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    <span class="lbl">Audience</span>
+    <div class="grid two-col">
+        <div class="field">
+            <label for="{{ form.name.id_for_label }}">Name</label>
+            {{ form.name }}
+            {{ form.name.errors }}
+        </div>
+        <div class="field">
+            <label for="{{ form.mode.id_for_label }}">SpringServe update mode</label>
+            {{ form.mode }}
+            {{ form.mode.errors }}
+        </div>
+        <div class="field full">
+            <label for="{{ form.description.id_for_label }}">Description</label>
+            {{ form.description }}
+            {{ form.description.errors }}
+        </div>
+    </div>
+
+    <span class="lbl section-label">Snowflake query</span>
+    <div class="field">
+        <label for="{{ form.query.id_for_label }}">SQL</label>
+        {{ form.query }}
+        {{ form.query.errors }}
+    </div>
+
+    <span class="lbl section-label">Automatic refresh</span>
+    <div class="grid schedule-grid">
+        <div class="field">
+            <label for="{{ form.refresh_frequency.id_for_label }}">Frequency</label>
+            {{ form.refresh_frequency }}
+            {{ form.refresh_frequency.errors }}
+        </div>
+
+        <div class="field schedule-option" data-schedule="weekly">
+            <label for="{{ form.weekly_day.id_for_label }}">Weekday</label>
+            {{ form.weekly_day }}
+            {{ form.weekly_day.errors }}
+            <div class="meta">Default: Monday.</div>
+        </div>
+
+        <div class="field schedule-option" data-schedule="monthly">
+            <label for="{{ form.monthly_day.id_for_label }}">Day of month</label>
+            {{ form.monthly_day }}
+            {{ form.monthly_day.errors }}
+            <div class="meta">Default: day 1. Days 29–31 are clamped to the last day in shorter months.</div>
+        </div>
+
+        <div class="field schedule-option" data-schedule="weekly monthly">
+            <label for="{{ form.schedule_time.id_for_label }}">Time</label>
+            {{ form.schedule_time }}
+            {{ form.schedule_time.errors }}
+            <div class="meta">Default: 22:00 (Europe/Madrid).</div>
+        </div>
+
+        <div class="field schedule-option full" data-schedule="once">
+            <label for="{{ form.once_at.id_for_label }}">One-time test date and time</label>
+            {{ form.once_at }}
+            {{ form.once_at.errors }}
+            <div class="meta">
+                Use this for the first controlled test with 2–3 audiences today. After it runs,
+                edit the audience back to Weekly or Monthly.
+            </div>
+        </div>
+
+        <div class="field full">
+            <label class="chip {% if form.enabled.value %}on{% endif %}">
+                {{ form.enabled }} Active audience
+            </label>
+            {{ form.enabled.errors }}
+        </div>
+    </div>
+
+    <div class="actions">
+        <a class="button secondary" href="{% url 'web:dashboard' %}">Cancel</a>
+        <button class="primary" type="submit">{{ submit_label }}</button>
+    </div>
+</form>
+{% endblock %}

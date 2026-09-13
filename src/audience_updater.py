@@ -1,5 +1,5 @@
 import time
-from springserve_client import (
+from src.springserve_client import (
     get_segment_ifas,
     get_segments,
     create_segment,
@@ -85,10 +85,12 @@ def append_new_ifas(segment_id, valid_ifas, output_path):
 
     print(f"New IFAs to append: {len(new_ifas):,}")
 
-    # If there are no new IFAs, do nothing
+    # If there are no new IFAs, keep the current SpringServe segment.
+    # Returning the segment keeps audience_service.py consistent and avoids
+    # treating a valid no-change append as a failure.
     if len(new_ifas) == 0:
         print("No new IFAs to append")
-        return None
+        return get_segment_by_id(segment_id)
 
     # Convert the output path into a Path object
     output_path = Path(output_path)

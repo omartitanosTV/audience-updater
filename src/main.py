@@ -1,7 +1,15 @@
+import sys
 from pathlib import Path
-from springserve_client import authenticate
-from audience_builder import build_audience_from_query
-from audience_updater import (
+
+
+# Allow this learning/test script to be run directly with `python src/main.py`.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+from src.springserve_client import authenticate
+from src.audience_builder import build_audience_from_query
+from src.audience_updater import (
     ensure_segment,
     update_audience,
 )

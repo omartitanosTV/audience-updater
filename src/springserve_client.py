@@ -6,20 +6,63 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Authenticate with SpringServe and return a valid token.
+# Reuse one HTTP session across SpringServe requests
+SESSION = requests.Session()
+
+
+class SpringServeAPIError(RuntimeError):
+    """Raised when SpringServe returns an unexpected or failed response."""
+
+
+# Read the SpringServe base URL and stop early if it is missing
+def _get_base_url():
+    base_url = os.getenv("SPRINGSERVE_BASE_URL")
+
+    if not base_url:
+        raise ValueError("SPRINGSERVE_BASE_URL is not configured")
+
+    return base_url.rstrip("/")
+
+
+# Raise a more useful error than requests' default HTTP message
+def _raise_for_status(response, label):
+    if response.ok:
+        return
+
+    response_body = response.text[:2000]
+    message = f"{label}: HTTP {response.status_code}"
+
+    if response_body:
+        message += f" — {response_body}"
+
+    raise SpringServeAPIError(message)
+
+
+# Convert a SpringServe response to JSON with a clear error if it is not JSON
+def _response_json(response):
+    try:
+        return response.json()
+    except ValueError as error:
+        raise SpringServeAPIError(
+            "SpringServe returned a non-JSON response."
+        ) from error
+
+
+# Authenticate with SpringServe and return a valid token
 def authenticate():
     # Read SpringServe credentials from .env
     email = os.getenv("SPRINGSERVE_EMAIL")
     password = os.getenv("SPRINGSERVE_PASSWORD")
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
 
     # Stop if any required setting is missing
-    if not email or not password or not base_url:
-        raise ValueError("SpringServe credentials are not fully configured")
+    if not email or not password:
+        raise ValueError(
+            "SpringServe credentials are not fully configured"
+        )
 
     # Send login credentials to SpringServe
-    response = requests.post(
-        f"{base_url}/auth",
+    response = SESSION.post(
+        f"{_get_base_url()}/auth",
         json={
             "email": email,
             "password": password,
@@ -30,45 +73,77 @@ def authenticate():
         timeout=60,
     )
 
-    # Raise an error if SpringServe returns 4xx or 5xx
-    response.raise_for_status()
-
-    # Convert the JSON response into a Python dictionary
-    data = response.json()
+    _raise_for_status(response, "SpringServe authentication failed")
 
     # Extract the authentication token
-    token = data.get("token")
+    data = _response_json(response)
+    token = data.get("token") if isinstance(data, dict) else None
 
     if not token:
-        raise ValueError("SpringServe returned no authentication token")
+        raise SpringServeAPIError(
+            "SpringServe returned no authentication token"
+        )
 
-    return token
-    
-# Get all segments from SpringServe, returning a list of segment dictionaries.
-def get_segments():
-    # Get a valid authentication token
+    return str(token)
+
+
+# Send an authenticated request and retry authentication once after HTTP 401
+def _request(method, endpoint, *, params=None, json=None, timeout=60):
     token = authenticate()
 
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
-
-    # Store all segments from all pages
-    all_segments = []
-
-    # Start from the first page
-    page = 1
-    
-    # Declare the number of segments per page (50 is the maximum allowed by SpringServe)
-    per_page = 50
-
-    while True:
-        # Request one page of segments
-        response = requests.get(
-            f"{base_url}/segments",
+    for attempt in range(2):
+        response = SESSION.request(
+            method,
+            f"{_get_base_url()}/{endpoint.lstrip('/')}",
             headers={
                 "Authorization": token,
                 "Accept": "application/json",
             },
+            params=params,
+            json=json,
+            timeout=timeout,
+        )
+
+        if response.status_code == 401 and attempt == 0:
+            token = authenticate()
+            continue
+
+        _raise_for_status(
+            response,
+            f"SpringServe {method.upper()} {endpoint} failed",
+        )
+        return response
+
+    raise SpringServeAPIError("SpringServe authentication retry failed")
+
+
+# Extract a list from the response shapes SpringServe commonly returns
+def _extract_collection(payload):
+    if isinstance(payload, list):
+        return payload
+
+    if isinstance(payload, dict):
+        for key in ("segments", "objects", "results", "data", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+
+    raise SpringServeAPIError(
+        "SpringServe returned an unexpected collection response."
+    )
+
+
+# Get all segments from SpringServe
+def get_segments():
+    all_segments = []
+    seen_ids = set()
+    page = 1
+    per_page = 50
+
+    while True:
+        response = _request(
+            "GET",
+            "/segments",
             params={
                 "page": page,
                 "per": per_page,
@@ -76,176 +151,148 @@ def get_segments():
             timeout=60,
         )
 
-        # Raise an error if SpringServe returns 4xx or 5xx
-        response.raise_for_status()
+        segments = _extract_collection(_response_json(response))
 
-        # Convert the current page response into Python data
-        segments = response.json()
-
-        # Add this page's segments to the full list
-        all_segments.extend(segments)
-
-        # If this page has fewer than 50 segments,
-        # it means we reached the last page
-        if len(segments) < per_page:
+        if not segments:
             break
 
-        # Otherwise, move to the next page
+        added_this_page = 0
+
+        for segment in segments:
+            segment_id = str(segment.get("id"))
+
+            if segment_id in seen_ids:
+                continue
+
+            seen_ids.add(segment_id)
+            all_segments.append(segment)
+            added_this_page += 1
+
+        # A short page, or a page with no new IDs, means pagination is done
+        if len(segments) < per_page or added_this_page == 0:
+            break
+
         page += 1
 
-    # Return all segments from all pages
+        # Defensive guard against an API pagination loop
+        if page > 1000:
+            raise SpringServeAPIError(
+                "SpringServe pagination did not terminate."
+            )
+
     return all_segments
 
-# Create a new segment in SpringServe, returning the created segment's data as a Python dictionary.
+
+# Create a new device-ID segment in SpringServe
 def create_segment(name, description):
-    # Get a valid authentication token
-    token = authenticate()
-
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
-
-    # Build the segment configuration
-    payload = {
-        "name": name,
-        "description": description,
-        "segment_type": "list",
-        "segment_list_type": "device_id",
-    }
-
-    # Send the request to create the segment
-    response = requests.post(
-        f"{base_url}/segments",
-        headers={
-            "Authorization": token,
-            "Accept": "application/json",
+    response = _request(
+        "POST",
+        "/segments",
+        json={
+            "name": name,
+            "description": description or "",
+            "active": True,
+            "segment_type": "list",
+            "segment_list_type": "device_id",
         },
-        json=payload,
         timeout=60,
     )
 
-    # Stop if SpringServe returns an HTTP error
-    response.raise_for_status()
+    data = _response_json(response)
 
-    # Return the created segment
-    return response.json()
-
-
-# When segments exist, SpringServe requires a description to be provided when creating a new segment. 
-# This function replaces the IFAs in an existing segment with the contents of a CSV file.
-def replace_segment_ifas(segment_id, file_path):
-    # Get a valid authentication token
-    token = authenticate()
-
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
-
-    # Open the CSV file in binary mode
-    with open(file_path, "rb") as file:
-
-        # Send the CSV file to SpringServe
-        response = requests.post(
-            f"{base_url}/segments/{segment_id}/items/file_bulk_replace",
-            headers={
-                "Authorization": token,
-                "Accept": "application/json",
-            },
-            files={
-                "csv_file": file
-            },
-            timeout=300,
+    if not isinstance(data, dict) or not data.get("id"):
+        raise SpringServeAPIError(
+            "SpringServe created the segment but returned no segment ID."
         )
 
-    # Stop if SpringServe returns an HTTP error
-    response.raise_for_status()
-
-    # Return SpringServe's response
-    return response.json()
+    return data
 
 
-# This function retrieves a specific segment from SpringServe by its ID, 
-# returning the segment's data as a Python dictionary. 
-# We will use this function to confirm that the segment's IFAs were successfully replaced.
-def get_segment_by_id(segment_id):
-    # Get a valid authentication token
+# Upload a CSV to a SpringServe segment using replace or append
+def _upload_segment_file(segment_id, file_path, action):
     token = authenticate()
 
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
+    for attempt in range(2):
+        with open(file_path, "rb") as file:
+            response = SESSION.post(
+                f"{_get_base_url()}/segments/{segment_id}/items/{action}",
+                headers={
+                    "Authorization": token,
+                    "Accept": "application/json",
+                },
+                files={
+                    "csv_file": file
+                },
+                timeout=900,
+            )
 
-    # Request one specific segment by ID
-    response = requests.get(
-        f"{base_url}/segments/{segment_id}",
-        headers={
-            "Authorization": token,
-            "Accept": "application/json",
-        },
+        if response.status_code == 401 and attempt == 0:
+            token = authenticate()
+            continue
+
+        _raise_for_status(
+            response,
+            f"SpringServe segment upload ({action}) failed",
+        )
+        return _response_json(response)
+
+    raise SpringServeAPIError("SpringServe upload authentication retry failed")
+
+
+# Replace the IFAs in an existing segment with the contents of a CSV file
+def replace_segment_ifas(segment_id, file_path):
+    return _upload_segment_file(
+        segment_id=segment_id,
+        file_path=file_path,
+        action="file_bulk_replace",
+    )
+
+
+# Retrieve one specific segment by ID
+def get_segment_by_id(segment_id):
+    response = _request(
+        "GET",
+        f"/segments/{segment_id}",
         timeout=60,
     )
 
-    # Stop if SpringServe returns an HTTP error
-    response.raise_for_status()
+    data = _response_json(response)
 
-    # Return the segment as Python data
-    return response.json()
+    if not isinstance(data, dict):
+        raise SpringServeAPIError(
+            "SpringServe returned an invalid segment response."
+        )
+
+    return data
 
 
-# This function retrieves all IFAs from a specific segment in SpringServe, returning them as a list of strings.
+# Retrieve all IFAs from one SpringServe segment
 def get_segment_ifas(segment_id):
-    # Get a valid authentication token
-    token = authenticate()
-
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
-
-    # Request all IFAs from the segment.
-    # Important: SpringServe returns an empty list if pagination params are sent.
-    response = requests.get(
-        f"{base_url}/segments/{segment_id}/items",
-        headers={
-            "Authorization": token,
-            "Accept": "application/json",
-        },
-        timeout=300,
+    # Important: this endpoint has previously returned an empty list when
+    # pagination parameters were supplied, so the request intentionally has
+    # no page/per parameters.
+    response = _request(
+        "GET",
+        f"/segments/{segment_id}/items",
+        timeout=900,
     )
 
-    # Stop if SpringServe returns an HTTP error
-    response.raise_for_status()
-
-    # Convert the response into Python data
-    items = response.json()
-
-    # Store the extracted IFAs
+    items = _extract_collection(_response_json(response))
     all_ifas = []
 
     for item in items:
-        all_ifas.append(item["item"])
+        value = item.get("item") if isinstance(item, dict) else None
+
+        if value:
+            all_ifas.append(value)
 
     return all_ifas
 
 
-# This function appends new IFAs to an existing segment in SpringServe, using a CSV file containing only the new IFAs.
+# Append new IFAs to an existing segment from a CSV file
 def append_segment_ifas(segment_id, file_path):
-    # Get a valid authentication token
-    token = authenticate()
-
-    # Read the SpringServe base URL from .env
-    base_url = os.getenv("SPRINGSERVE_BASE_URL")
-
-    # Open the CSV file containing only the new IFAs
-    with open(file_path, "rb") as file:
-        response = requests.post(
-            f"{base_url}/segments/{segment_id}/items/file_bulk_create",
-            headers={
-                "Authorization": token,
-                "Accept": "application/json",
-            },
-            files={
-                "csv_file": file
-            },
-            timeout=300,
-        )
-
-    # Stop if SpringServe returns an HTTP error
-    response.raise_for_status()
-
-    return response.json()
+    return _upload_segment_file(
+        segment_id=segment_id,
+        file_path=file_path,
+        action="file_bulk_create",
+    )

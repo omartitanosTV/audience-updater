@@ -1,0 +1,56 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Audience Automation{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'web/app.css' %}">
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <div class="tally live"></div>
+        <div>
+            <h1>{% block header_title %}Audience Automation{% endblock %}</h1>
+        </div>
+        <div class="sub">SpringServe audience management</div>
+    </header>
+
+    <nav class="mainnav">
+        <div class="brand">
+            <span class="brand-mark"></span>
+            <span>TITAN OS</span>
+        </div>
+
+        <a href="{% url 'web:dashboard' %}" class="{% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+            Audience Automation
+        </a>
+        <a href="{% url 'web:history' %}" class="{% if request.resolver_match.url_name == 'history' %}active{% endif %}">
+            Run History
+        </a>
+
+        <div class="nav-spacer"></div>
+        <span class="nav-note">Designed to become a section of the main Audience Tool.</span>
+    </nav>
+
+    <div class="flash-area">
+        {% for message in messages %}
+            <div class="msg {% if message.tags == 'error' %}err{% elif message.tags == 'success' %}ok{% else %}warn{% endif %}">
+                {{ message }}
+            </div>
+        {% endfor %}
+    </div>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</div>
+
+<script src="{% static 'web/app.js' %}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

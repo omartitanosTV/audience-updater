@@ -1,10 +1,18 @@
-from audience_service import run_audience_from_db
+import sys
+from pathlib import Path
 
 
-# Run the audience stored in the database
-updated_segment = run_audience_from_db(
-    audience_id=1
-)
+# Allow this learning/test script to be run directly with `python src/test.py`.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-print("Audience executed successfully")
-print(f"Final segment count: {updated_segment['segment_count']}")
+
+from src.audience_service import run_audience_from_db
+
+
+audience_id = 1
+
+result = run_audience_from_db(audience_id)
+
+print("Audience updated successfully")
+print(result)

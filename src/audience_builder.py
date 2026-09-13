@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from snowflake_client import run_query
+from src.snowflake_client import run_query
 
 
 # This function runs an audience query from a SQL file

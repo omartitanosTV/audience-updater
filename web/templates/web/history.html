@@ -1,0 +1,57 @@
+{% extends "web/base.html" %}
+
+{% block title %}Run History · Audience Automation{% endblock %}
+{% block header_title %}Run History{% endblock %}
+
+{% block content %}
+<div class="page-toolbar">
+    <p class="intro">
+        Every manual and scheduled refresh is recorded here with its audience size,
+        SpringServe result, duration and error message.
+    </p>
+    <a class="button secondary" href="{% url 'web:dashboard' %}">Back to dashboard</a>
+</div>
+
+<div class="tblwrap history-table">
+    <table>
+        <thead>
+            <tr>
+                <th>Audience</th>
+                <th>Started</th>
+                <th>Finished</th>
+                <th>Trigger</th>
+                <th>Status</th>
+                <th>Total rows</th>
+                <th>Valid IFAs</th>
+                <th>Invalid IFAs</th>
+                <th>Segment count</th>
+                <th>Duration</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+                <tr>
+                    <td>{{ run.audience_name }}</td>
+                    <td>{{ run.started_at }}</td>
+                    <td>{{ run.finished_at|default:"—" }}</td>
+                    <td><span class="pill">{{ run.trigger_source|title }}</span></td>
+                    <td><span class="status status-{{ run.status }}">{{ run.status|title }}</span></td>
+                    <td class="num">{{ run.total_rows|default_if_none:"—" }}</td>
+                    <td class="num">{{ run.valid_ifas|default_if_none:"—" }}</td>
+                    <td class="num">{{ run.invalid_ifas|default_if_none:"—" }}</td>
+                    <td class="num">{{ run.segment_count|default_if_none:"—" }}</td>
+                    <td>{{ run.duration_display }}</td>
+                    <td class="error-cell" title="{{ run.error_message|default:'' }}">
+                        {{ run.error_message|default:"—"|truncatechars:80 }}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="11" class="empty-state">No executions recorded yet.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
